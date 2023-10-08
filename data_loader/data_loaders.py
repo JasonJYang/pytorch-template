@@ -10,7 +10,7 @@ class MnistDataLoader():
     MNIST data loading demo using BaseDataLoader
     """
     def __init__(self, logger, data_dir, batch_size, seed=0, shuffle=True, validation_split=0.1, test_split=0.2, num_workers=1, training=True):
-        trsfm = transforms.Compose([
+        self.trsfm = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.1307,), (0.3081,))
         ])
@@ -22,8 +22,9 @@ class MnistDataLoader():
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.seed = seed
+        self.training = training
         
-        self.dataset = datasets.MNIST(self.data_dir, train=training, download=True, transform=trsfm)
+        self.dataset = datasets.MNIST(self.data_dir, train=training, download=True, transform=self.trsfm)
 
     def get_data_loader(self):
         self.logger.info('Splitting dataset into train, validation, and test sets using seed {}'.format(self.seed))
@@ -47,3 +48,8 @@ class MnistDataLoader():
         test_loader  = DataLoader(test_dataset,  batch_size=self.batch_size, shuffle=self.shuffle, num_workers=self.num_workers)
 
         return train_loader, valid_loader, test_loader
+    
+    def get_dataset(self, data_dir):
+        trainset = datasets.MNIST(data_dir, train='training', download=True, transform=self.trsfm)
+        testset  = datasets.MNIST(data_dir, train='testing',  download=True, transform=self.trsfm)
+        return trainset, testset
