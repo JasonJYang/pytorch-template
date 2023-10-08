@@ -22,9 +22,9 @@ def main(config):
     logger = config.get_logger('train')
 
     # setup data_loader instances
+    config['data_loader']['args']['logger'] = logger
     data_loader = config.init_obj('data_loader', module_data)
-    valid_data_loader = data_loader.split_dataset(valid=True)
-    test_data_loader = data_loader.split_dataset(test=True)
+    train_data_loader, valid_data_loader, test_data_loader = data_loader.get_data_loader()
 
     # build model architecture, then print to console
     model = config.init_obj('arch', module_arch)
@@ -41,7 +41,7 @@ def main(config):
 
     trainer = Trainer(model, criterion, metrics, optimizer,
                       config=config,
-                      data_loader=data_loader,
+                      train_data_loader=train_data_loader,
                       valid_data_loader=valid_data_loader,
                       test_data_loader=test_data_loader,
                       lr_scheduler=lr_scheduler)

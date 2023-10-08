@@ -28,7 +28,6 @@ PyTorch deep learning project made easy.
     - [Checkpoints](#checkpoints)
     - [Tensorboard Visualization](#tensorboard-visualization)
   - [Contribution](#contribution)
-  - [TODOs](#todos)
   - [License](#license)
   - [Acknowledgements](#acknowledgements)
 
@@ -361,17 +360,6 @@ If you need more visualizations, use `add_scalar('tag', data)`, `add_image('tag'
 Feel free to contribute any kind of function or enhancement, here the coding style follows PEP8
 
 Code should pass the [Flake8](http://flake8.pycqa.org/en/latest/) check before committing.
-
-## TODOs
-
-- [ ] Multiple optimizers
-- [ ] Support more tensorboard functions
-- [x] Using fixed random seed
-- [x] Support pytorch native tensorboard
-- [x] `tensorboardX` logger support
-- [x] Configurable logging layout, checkpoint naming
-- [x] Iteration-based training (instead of epoch-based)
-- [x] Adding command line option for fine-tuning
 
 ## License
 This project is licensed under the MIT License. See  LICENSE for more details
