@@ -54,7 +54,8 @@ class Trainer(BaseTrainer):
             self.writer.set_step((epoch - 1) * self.len_epoch + batch_idx)
             self.train_metrics.update('loss', loss.item())
             for met in self.metric_fns:
-                self.train_metrics.update(met.__name__, met(output, target))
+                self.train_metrics.update(met.__name__, 
+                    met(output.cpu().detach().numpy(), target.cpu().detach().numpy()))
 
             if batch_idx % self.log_step == 0:
                 self.logger.debug('Train Epoch: {} {} Loss: {:.6f}'.format(
@@ -86,6 +87,7 @@ class Trainer(BaseTrainer):
         """
         self.model.eval()
         self.valid_metrics.reset()
+        y_true, y_pred = [], []
         with torch.no_grad():
             for batch_idx, (data, target) in enumerate(self.valid_data_loader):
                 data, target = data.to(self.device), target.to(self.device)
@@ -95,10 +97,17 @@ class Trainer(BaseTrainer):
 
                 self.writer.set_step((epoch - 1) * len(self.valid_data_loader) + batch_idx, 'valid')
                 self.valid_metrics.update('loss', loss.item())
-                for met in self.metric_fns:
-                    self.valid_metrics.update(met.__name__, met(output, target))
+                
+                y_pred.append(output.cpu().detach().numpy())
+                y_true.append(target.cpu().detach().numpy())
+                
                 self.writer.add_image('input', make_grid(data.cpu(), nrow=8, normalize=True))
 
+        y_pred = np.concatenate(y_pred)
+        y_true = np.concatenate(y_true)
+        for met in self.metric_fns:
+            self.valid_metrics.update(met.__name__, met(y_pred, y_true))
+        
         # add histogram of model parameters to the tensorboard
         for name, p in self.model.named_parameters():
             self.writer.add_histogram(name, p, bins='auto')
@@ -107,7 +116,7 @@ class Trainer(BaseTrainer):
     def test(self):
         self.model.eval()
         total_loss = 0.0
-        total_metrics = torch.zeros(len(self.metric_fns))
+        y_true, y_pred = [], []
         with torch.no_grad():
             for batch_idx, (data, target) in enumerate(self.test_data_loader):
                 data, target = data.to(self.device), target.to(self.device)
@@ -115,15 +124,19 @@ class Trainer(BaseTrainer):
                 output = self.model(data)
                 loss = self.criterion(output, target)
 
+                y_pred.append(output.cpu().detach().numpy())
+                y_true.append(target.cpu().detach().numpy())
+
                 batch_size = data.shape[0]
                 total_loss += loss.item() * batch_size
-                for i, metric in enumerate(self.metric_fns):
-                    total_metrics[i] += metric(output, target) * batch_size
+
+        y_pred = np.concatenate(y_pred)
+        y_true = np.concatenate(y_true)
+        test_metrics = {'loss': total_loss / len(self.test_data_loader.dataset)}     
+        for metric in self.metric_fns:
+            test_metrics[metric.__name__] = metric(y_pred, y_true)
         
-        test_output = {'n_samples': len(self.test_data_loader.sampler),
-                       'total_loss': total_loss,
-                       'total_metrics': total_metrics}
-        return test_output
+        return test_metrics
 
     def _progress(self, batch_idx):
         base = '[{}/{} ({:.0f}%)]'

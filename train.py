@@ -51,7 +51,6 @@ def main(config):
     """Test."""
     logger = config.get_logger('test')
     logger.info(model)
-    test_metrics = [getattr(module_metric, met) for met in config['metrics']]
     
     # load best checkpoint
     resume = str(config.save_dir / 'model_best.pth')
@@ -61,11 +60,7 @@ def main(config):
     model.load_state_dict(state_dict)
 
     test_output = trainer.test()
-    log = {'loss': test_output['total_loss'] / test_output['n_samples']}
-    log.update({
-        met.__name__: test_output['total_metrics'][i].item() / test_output['n_samples'] \
-            for i, met in enumerate(test_metrics)})
-    value_format = ''.join(['{:15s}: {:.2f}\t'.format(k, v) for k, v in log.items()])
+    value_format = ''.join(['{:15s}: {:.2f}\t'.format(k, v) for k, v in test_output.items()])
     logger.info('    {:15s}: {}'.format('test', value_format))
 
 if __name__ == '__main__':
