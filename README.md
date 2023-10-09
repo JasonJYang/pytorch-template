@@ -54,8 +54,11 @@ PyTorch deep learning project made easy.
   pytorch-template/
   │
   ├── train.py - main script to start training and testing
+  ├── ray_tune.py - main script for hyperparameters tuning using ray
   │
   ├── config.json - holds configuration for training
+  ├── tuning_config.json - holds configuration for tuning
+  │
   ├── parse_config.py - class to handle config file and cli options
   │
   ├── new_project.py - initialize new project with template files

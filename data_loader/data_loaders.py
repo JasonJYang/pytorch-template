@@ -1,4 +1,5 @@
 import torch
+from pathlib import Path
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, random_split
 
@@ -50,6 +51,6 @@ class MnistDataLoader():
         return train_loader, valid_loader, test_loader
     
     def get_dataset(self, data_dir):
-        trainset = datasets.MNIST(data_dir, train='training', download=True, transform=self.trsfm)
-        testset  = datasets.MNIST(data_dir, train='testing',  download=True, transform=self.trsfm)
+        trainset = datasets.MNIST(data_dir, train=True, download=False, transform=self.trsfm)
+        testset  = datasets.MNIST(data_dir, train=False,  download=False, transform=self.trsfm)
         return trainset, testset

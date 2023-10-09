@@ -1,63 +1,66 @@
+import os
+import ray
 import argparse
 import collections
 import torch
 import numpy as np
 from functools import partial
+from torch.utils.data import DataLoader, random_split
+from ray import train, tune
+from ray.train import Checkpoint
+from ray.tune.schedulers import ASHAScheduler
+
 import data_loader.data_loaders as module_data
 import model.loss as module_loss
 import model.metric as module_metric
 from model.model import MnistModel
 from parse_config import ConfigParser
-from trainer import Trainer
 from utils import prepare_device
 
-from torch.utils.data import DataLoader, random_split
-from ray import tune
-from ray.air import Checkpoint, session
-from ray.tune.schedulers import ASHAScheduler
 
-def train_tune(config, logger, parameter_config, data_loader):
-    model = MnistModel(parameter_config['l1'], parameter_config['l2'])
+def train_tune(config, logger, args, data_loader):
+    # model
+    model = MnistModel(config['l1'], config['l2'])
+    
     # get device
-    device, device_ids = prepare_device(config['n_gpu'], logger)
+    device, device_ids = prepare_device(args['n_gpu'], logger)
     model = model.to(device)
     if len(device_ids) > 1:
         model = torch.nn.DataParallel(model, device_ids=device_ids)
     
     # get function handles of loss and metrics
-    criterion = getattr(module_loss, config['loss'])
-    metrics = [getattr(module_metric, met) for met in config['metrics']]
+    criterion = getattr(module_loss, args['loss'])
+    metrics = [getattr(module_metric, met) for met in args['metrics']]
 
     # build optimizer, learning rate scheduler. delete every lines containing lr_scheduler for disabling scheduler
     trainable_params = filter(lambda p: p.requires_grad, model.parameters())
-    optimizer = torch.optim.SGD(trainable_params, lr=parameter_config['lr'], momentum=0.9)
-    lr_scheduler = config.init_obj('lr_scheduler', torch.optim.lr_scheduler, optimizer)
+    optimizer = torch.optim.SGD(trainable_params, lr=config['lr'], momentum=0.9)
+    lr_scheduler = args.init_obj('lr_scheduler', torch.optim.lr_scheduler, optimizer)
 
     # checkpoint
-    checkpoint = session.get_checkpoint()
-    if checkpoint:
-        checkpoint_state = checkpoint.to_dict()
-        start_epoch = checkpoint_state["epoch"]
-        model.load_state_dict(checkpoint_state["net_state_dict"])
-        optimizer.load_state_dict(checkpoint_state["optimizer_state_dict"])
-    else:
-        start_epoch = 0
+    # To restore a checkpoint, use `train.get_checkpoint()`.
+    loaded_checkpoint = train.get_checkpoint()
+    if loaded_checkpoint:
+        with loaded_checkpoint.as_directory() as loaded_checkpoint_dir:
+           model_state, optimizer_state = torch.load(os.path.join(loaded_checkpoint_dir, "checkpoint.pt"))
+        model.load_state_dict(model_state)
+        optimizer.load_state_dict(optimizer_state)
 
     # dataset
-    trainset, _ = data_loader.get_dataset(data_dir=config['data_loader']['args']['data_dir'])
+    trainset, _ = data_loader.get_dataset(data_dir=args['data_loader']['args']['data_dir'])
     test_abs = int(len(trainset) * 0.2)
     train_subset, val_subset = random_split(trainset, [len(trainset) - test_abs, test_abs])
     train_loader = DataLoader(train_subset, 
-                              batch_size=config['data_loader']['args']['batch_size'], 
-                              shuffle=config['data_loader']['args']['shuffle'], 
-                              num_workers=config['data_loader']['args']['num_workers'])
+                              batch_size=args['data_loader']['args']['batch_size'], 
+                              shuffle=args['data_loader']['args']['shuffle'], 
+                              num_workers=args['data_loader']['args']['num_workers'])
     val_loader = DataLoader(val_subset,
-                            batch_size=config['data_loader']['args']['batch_size'], 
-                            shuffle=config['data_loader']['args']['shuffle'], 
-                            num_workers=config['data_loader']['args']['num_workers'])
+                            batch_size=args['data_loader']['args']['batch_size'], 
+                            shuffle=args['data_loader']['args']['shuffle'], 
+                            num_workers=args['data_loader']['args']['num_workers'])
     
     # train
-    for epoch in range(start_epoch, config['trainer']['epoch']):
+    for epoch in range(args['trainer']['epochs']):
         running_loss = 0.0
         epoch_steps = 0
         for i, data in enumerate(train_loader, 0):
@@ -87,7 +90,6 @@ def train_tune(config, logger, parameter_config, data_loader):
         # validation loss
         val_loss = 0.0
         val_steps = 0
-        val_metrics = {}
         y_pred, y_true = [], []
         for i, data in enumerate(val_loader, 0):
             with torch.no_grad():
@@ -109,20 +111,22 @@ def train_tune(config, logger, parameter_config, data_loader):
             report[met.__name__] = met(y_pred, y_true)
 
         # checkpoint
-        checkpoint = Checkpoint(epoch=epoch,
-                                net_state_dict=model.state_dict(),
-                                optimizer_state_dict=optimizer.state_dict())
-        session.report(**report, checkpoint=checkpoint)
+        os.makedirs("my_model", exist_ok=True)
+        torch.save(
+            (model.state_dict(), optimizer.state_dict()), "my_model/checkpoint.pt")
+        checkpoint = Checkpoint.from_directory("my_model")
+
+        train.report(report, checkpoint=checkpoint)
     
     logger.info('Finished Training')
 
-def test(config, model, testset, device):
+def test(args, model, testset, device):
     testloader = DataLoader(testset, 
-                            batch_size=config['data_loader']['args']['batch_size'], 
-                            shuffle=config['data_loader']['args']['shuffle'], 
-                            num_workers=config['data_loader']['args']['num_workers'])
+                            batch_size=args['data_loader']['args']['batch_size'], 
+                            shuffle=args['data_loader']['args']['shuffle'], 
+                            num_workers=args['data_loader']['args']['num_workers'])
 
-    metrics = [getattr(module_metric, met) for met in config['metrics']]
+    metrics = [getattr(module_metric, met) for met in args['metrics']]
     test_metrics = {}
     y_pred, y_true = [], []
     for i, data in enumerate(testloader, 0):
@@ -142,32 +146,39 @@ def test(config, model, testset, device):
     return test_metrics
 
 
-def main(config):
-    logger = config.get_logger('Tune')
+def main(args):
+    logger = args.get_logger('Tune')
 
-    config['data_loader']['args']['logger'] = logger
-    data_loader = config.init_obj('data_loader', module_data)
+    # set the temp directory of Ray, usually broken when the path is too long
+    ray_tmp_dir = '/home/jiannan/ray_temp_log'
+    if not os.path.exists(ray_tmp_dir):
+        os.makedirs(ray_tmp_dir)
+    ray.init(_temp_dir=str(ray_tmp_dir))
 
-    parameter_config = {
-        "l1": tune.choice([2**i for i in range(9)]),
-        "l2": tune.choice([2**i for i in range(9)]),
-        "lr": tune.loguniform(1e-4, 1e-1),
-        "batch_size": tune.choice([2, 4, 8, 16]),
+    args['data_loader']['args']['logger'] = logger
+    data_loader = args.init_obj('data_loader', module_data)
+    _, testset = data_loader.get_dataset(data_dir=args['data_loader']['args']['data_dir'])
+
+    config = {
+        "l1": tune.grid_search([2**i for i in range(9)]),
+        "l2": tune.grid_search([2**i for i in range(9)]),
+        "lr": tune.grid_search([1e-4, 1e-3, 1e-2, 1e-1]),
+        "batch_size": tune.grid_search([2, 4, 8, 16]),
     }
     scheduler = ASHAScheduler(
-        max_t=config['trainer']['epochs'],
+        max_t=args['trainer']['epochs'],
         grace_period=1,
         reduction_factor=2,
         metric='loss',
         mode='min')
     result = tune.run(
-        partial(train_tune, config, logger, parameter_config, data_loader),
-        resources_per_trial={"cpu": config['trainer']['cpus_per_trial'], 
-                             "gpu": config['trainer']['gpus_per_trial']},
-        config=parameter_config,
-        num_samples=config['trainer']['num_samples'],
+        partial(train_tune, logger=logger, args=args, data_loader=data_loader),
+        resources_per_trial={"cpu": args['trainer']['cpus_per_trial'], 
+                             "gpu": args['trainer']['gpus_per_trial']},
+        config=config,
+        num_samples=args['trainer']['num_samples'],
         scheduler=scheduler,
-        config_dir=config.log_dir)
+        local_dir=str(args.log_dir.absolute()))
     
     best_trial = result.get_best_trial("loss", "min", "last")
     logger.info("Best trial config: {}".format(best_trial.config))
@@ -179,20 +190,17 @@ def main(config):
             logger.info("\t{}: {}".format(key, value))
     
     best_trained_model = MnistModel(best_trial.config["l1"], best_trial.config["l2"])
-    device, device_ids = prepare_device(config['n_gpu'], logger)
+    device, device_ids = prepare_device(args['n_gpu'], logger)
     best_trained_model = best_trained_model.to(device)
     if len(device_ids) > 1:
         best_trained_model = torch.nn.DataParallel(best_trained_model, device_ids=device_ids)
-    
     # load best checkpoint
-    best_checkpoint = best_trial.checkpoint.to_air_checkpoint()
-    best_checkpoint_data = best_checkpoint.to_dict()
-
-    best_trained_model.load_state_dict(best_checkpoint_data["net_state_dict"])
+    checkpoint_path = os.path.join(best_trial.checkpoint.to_directory(), "checkpoint.pt")
+    model_state, optimizer_state = torch.load(checkpoint_path)
+    best_trained_model.load_state_dict(model_state)
 
     # test
-    _, testset = data_loader.get_dataset(data_dir=config['data_loader']['args']['data_dir'])
-    test_metrics = test(config, best_trained_model, testset, device)
+    test_metrics = test(args, best_trained_model, testset, device)
     value_format = ''.join(['{:15s}: {:.2f}\t'.format(k, v) for k, v in test_metrics.items()])
     logger.info('    {:15s}: {}'.format('test', value_format))
 
@@ -212,5 +220,5 @@ if __name__ == '__main__':
         CustomArgs(['--lr', '--learning_rate'], type=float, target='optimizer;args;lr'),
         CustomArgs(['--bs', '--batch_size'], type=int, target='data_loader;args;batch_size')
     ]
-    config = ConfigParser.from_args(args, options)
-    main(config)
+    args = ConfigParser.from_args(args, options)
+    main(args)
