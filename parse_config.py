@@ -9,7 +9,7 @@ from utils import read_json, write_json
 
 
 class ConfigParser:
-    def __init__(self, config, resume=None, modification=None, run_id=None):
+    def __init__(self, config, resume=None, modification=None):
         """
         class to parse configuration json file. Handles hyperparameters for training, initializations of modules, checkpoint saving
         and logging module.
@@ -26,15 +26,20 @@ class ConfigParser:
         save_dir = Path(self.config['trainer']['save_dir'])
 
         exper_name = self.config['name']
-        if run_id is None: # use timestamp as default run-id
+        if 'run_id' not in self.config or self.config['run_id'] is None: # use timestamp as default run-id
             run_id = datetime.now().strftime(r'%m%d_%H%M%S')
-        self._save_dir = save_dir / 'models' / exper_name / run_id
-        self._log_dir = save_dir / 'log' / exper_name / run_id
+            exist_ok = False
+        else:
+            run_id = self.config['run_id']
+            exist_ok = True
+        # updated to save_dir / exper_name / run_id
+        # self._save_dir = save_dir / 'models' / exper_name / run_id
+        # self._log_dir = save_dir / 'log' / exper_name / run_id
+        self._save_dir = self._log_dir = save_dir / exper_name / run_id
 
         # make directory for saving checkpoints and log.
-        exist_ok = run_id == ''
         self.save_dir.mkdir(parents=True, exist_ok=exist_ok)
-        self.log_dir.mkdir(parents=True, exist_ok=exist_ok)
+        # self.log_dir.mkdir(parents=True, exist_ok=exist_ok)
 
         # save updated config file to the checkpoint dir
         write_json(self.config, self.save_dir / 'config.json')

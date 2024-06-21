@@ -1,6 +1,7 @@
 {
     "name": "Mnist_LeNet",
     "n_gpu": 1,
+    "run_id": "test",
 
     "arch": {
         "type": "MnistModel",
